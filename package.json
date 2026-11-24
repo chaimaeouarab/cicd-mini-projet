@@ -1,0 +1,17 @@
+{
+  "name": "cicd-mini-projet",
+  "version": "1.0.0",
+  "description": "Mini-projet CI/CD : GitHub Actions -> GHCR -> EC2",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "jest --ci"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  }
+}

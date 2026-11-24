@@ -1,0 +1,72 @@
+name: Deploy - EC2 (manuel)
+
+# Déclenchement uniquement manuel, indépendant de la CI.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag de l'image à déployer (ex : sha-1a2b3c4)"
+        required: true
+        type: string
+
+# Une seule exécution à la fois sur la cible "production" ;
+# une 2e exécution attend la fin de la 1re (pas d'annulation).
+concurrency:
+  group: deploy-ec2-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    name: Déployer ${{ inputs.tag }} sur EC2
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      TAG: ${{ inputs.tag }}
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      EC2_USER: ${{ secrets.EC2_USER }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Valider le format du tag
+        run: |
+          if [[ ! "$TAG" =~ ^sha-[0-9a-f]{7}$ ]]; then
+            echo "::error::Tag invalide : '$TAG' (attendu : sha-xxxxxxx)"
+            exit 1
+          fi
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Vérifier que l'image existe dans GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker manifest inspect "$IMAGE:$TAG" > /dev/null \
+            || { echo "::error::Image $IMAGE:$TAG introuvable dans GHCR"; exit 1; }
+
+      - name: Préparer la clé SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2.pem
+          chmod 600 ~/.ssh/ec2.pem
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Déployer sur EC2
+        env:
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          # Le token est transmis via stdin (jamais en argument de commande)
+          {
+            echo "export GHCR_USER='$GHCR_USER'"
+            echo "export GHCR_TOKEN='$GHCR_TOKEN'"
+            cat scripts/deploy.sh
+          } | ssh -i ~/.ssh/ec2.pem "$EC2_USER@$EC2_HOST" bash -s -- "$IMAGE" "$TAG"
+
+      - name: Vérifier la santé HTTP et la version en service
+        run: bash scripts/healthcheck.sh "http://$EC2_HOST/api/health" "$TAG"
+
+      - name: Nettoyage
+        if: always()
+        run: rm -f ~/.ssh/ec2.pem

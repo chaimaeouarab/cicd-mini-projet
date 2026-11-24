@@ -1,0 +1,55 @@
+// Transposition Jenkins (pour préparer les questions de la soutenance).
+// Le projet réel est réalisé avec GitHub Actions.
+//
+// - Jenkinsfile  = équivalent des fichiers .github/workflows/*.yml (pipeline as code)
+// - agent        = équivalent de "runs-on: ubuntu-latest" (machine qui exécute les étapes)
+// - parameters   = équivalent de workflow_dispatch + inputs (déclenchement manuel avec tag)
+// - credentials  = équivalent des secrets GitHub
+// - lock()       = équivalent de "concurrency" (plugin Lockable Resources)
+
+// ---------- Pipeline CI (déclenché par webhook sur push) ----------
+pipeline {
+  agent { label 'docker' }
+  environment { IMAGE = 'ghcr.io/<owner>/<repo>' }
+  stages {
+    stage('Tests') {
+      agent { docker { image 'node:20-alpine' } }
+      steps { sh 'npm ci && npm test' }
+    }
+    stage('Publication') {
+      when { branch 'main' }            // seulement sur main ; sautée si Tests échoue
+      steps {
+        script { env.TAG = "sha-${env.GIT_COMMIT.take(7)}" }
+        withCredentials([usernamePassword(credentialsId: 'ghcr',
+                         usernameVariable: 'U', passwordVariable: 'P')]) {
+          sh '''
+            echo "$P" | docker login ghcr.io -u "$U" --password-stdin
+            docker build --build-arg APP_VERSION=$TAG -t $IMAGE:$TAG .
+            docker push $IMAGE:$TAG
+          '''
+        }
+      }
+    }
+  }
+}
+
+// ---------- Pipeline Deploy (job séparé, lancé à la main "Build with Parameters") ----------
+// pipeline {
+//   agent any
+//   parameters { string(name: 'TAG', description: 'ex : sha-1a2b3c4') }
+//   options { disableConcurrentBuilds() }
+//   stages {
+//     stage('Deploy') {
+//       steps {
+//         lock('ec2-production') {
+//           sshagent(['ec2-ssh-key']) {
+//             sh 'ssh ubuntu@$EC2_HOST bash -s -- $IMAGE $TAG < scripts/deploy.sh'
+//           }
+//         }
+//       }
+//     }
+//     stage('Healthcheck') {
+//       steps { sh 'bash scripts/healthcheck.sh http://$EC2_HOST/api/health $TAG' }
+//     }
+//   }
+// }
